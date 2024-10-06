@@ -1,0 +1,191 @@
+library(igraph)
+library(dplyr)
+library(Seurat)
+library(monocle)
+library(plyr)
+library(sctransform)
+library(ggplot2)
+library(ggsci)
+library(readr)
+library(readxl)
+library(Hmisc)
+setwd('F:/scRNA/workpath/3.myeloid')
+Subset_myeloid=readRDS("Subset_myeloid.rds") 
+dir.create("pseudotime_HT")
+Idents(Subset_myeloid) <- Subset_myeloid@meta.data[["stim"]]
+scRNAsub<- subset(Subset_myeloid, idents = c("tumor_Without_HT5","tumor_Without_HT6","tumor_With_HT1","tumor_With_HT3"))
+Idents(scRNAsub) <-scRNAsub@meta.data[["cellType"]]
+scRNAsub<- subset(scRNAsub, idents = c("Ms-C0",
+                                       "Ms-C1",
+                                       "Ms-C3",
+                                       "Ms-C4",
+                                       "Ms-C5",
+                                       "Ms-C6",
+                                       "Ms-C7",
+                                       "Ms-C9",
+                                       "Ms-C12",
+                                       "PMs-C11",
+                                       "Ms-C14",
+                                       "Ms-C15"))
+
+#创建monocle结构
+data = GetAssayData(scRNAsub, layer = "counts", assay = "RNA")
+data = as(as.matrix(data), 'sparseMatrix')
+
+feature_annotation = data.frame(gene_short_name = rownames(data))
+rownames(feature_annotation) = feature_annotation$gene_short_name
+
+sample<-scRNAsub@meta.data[["orig.ident"]]
+scRNAsub@meta.data$sample <- sample
+phenotype = scRNAsub@meta.data
+sample_sheet = phenotype[, c("seurat_clusters","sample","cellType")]
+pd <- new('AnnotatedDataFrame', data =sample_sheet)
+
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+
+mycds <- newCellDataSet(data,
+                        phenoData = pd,
+                        featureData = fd,
+                        expressionFamily = negbinomial.size())
+
+#评估大小因子和离散值
+mycds = estimateSizeFactors(mycds)
+options(DelayedArray.auto.block.size = 1000e6)
+mycds = estimateDispersions(mycds)
+
+
+##使用clusters差异表达基因
+diff.genes <- read.csv("F:/scRNA/workpath/3.myeloid/11.Subset_myeloid.csv")
+diff.genes <- subset(diff.genes,p_val_adj<0.01)$gene
+mycds <- setOrderingFilter(mycds, diff.genes)
+p1 <- plot_ordering_genes(mycds)
+##使用seurat选择的高变基因
+var.genes <- VariableFeatures(scRNAsub)
+mycds <- setOrderingFilter(mycds, var.genes)
+p2 <- plot_ordering_genes(mycds)
+##使用monocle选择的高变基因
+disp_table <- dispersionTable(mycds)
+disp.genes <- subset(disp_table, mean_expression >= 0.1 & dispersion_empirical >= 1 * dispersion_fit)$gene_id
+mycds <- setOrderingFilter(mycds, disp.genes)
+p3 <- plot_ordering_genes(mycds)
+##结果对比
+p1|p2|p3
+
+#降维
+mycds <- reduceDimension(mycds, max_components = 2, method = 'DDRTree')
+#排序
+mycds <- orderCells(mycds)
+#State轨迹分布图
+plot1 <- plot_cell_trajectory(mycds, color_by = "State")
+ggsave("pseudotime_HT/State.pdf", plot = plot1, width = 6, height = 5)
+ggsave("pseudotime_HT/State.png", plot = plot1, width = 6, height = 5)
+##sample轨迹分布图
+plot2 <- plot_cell_trajectory(mycds, color_by = "sample")
+ggsave("pseudotime_HT/sample.pdf", plot = plot2, width = 6, height = 5)
+ggsave("pseudotime_HT/sample.png", plot = plot2, width = 6, height = 5)
+##Pseudotime轨迹图
+plot3 <- plot_cell_trajectory(mycds, color_by = "Pseudotime")
+ggsave("pseudotime_HT/Pseudotime.pdf", plot = plot3, width = 6, height = 5)
+ggsave("pseudotime_HT/Pseudotime.png", plot = plot3, width = 6, height = 5)
+##Cluster轨迹分布图
+plot4 <- plot_cell_trajectory(mycds, color_by = "seurat_clusters")
+ggsave("pseudotime_HT/Cluster.pdf", plot = plot2, width = 6, height = 5)
+ggsave("pseudotime_HT/Cluster.png", plot = plot2, width = 6, height = 5)
+#cellType轨迹分布图
+plot5 <- plot_cell_trajectory(mycds, color_by = "cellType")
+ggsave("pseudotime_HT/cellType.pdf", plot = plot2, width = 6, height = 5)
+ggsave("pseudotime_HT/cellType.png", plot = plot2, width = 6, height = 5)
+plotc <- plot1|plot2|plot3|plot4|plot5
+library(gridExtra)
+# 将四个图组合成一个列表
+plot_list <- list(plot1,plot2,plot3,plot4,plot5)
+# 指定布局为 2 行 3 列，每行两个图
+plotc <-grid.arrange(
+  grobs = plot_list,
+  ncol = 3,  # 每行 3 列
+  nrow = 2   # 2 行
+)
+##合并作图
+ggsave("pseudotime_HT/Combination.pdf", plot = plotc, width = 16, height = 10)
+ggsave("pseudotime_HT/Combination.png", plot = plotc, width = 16, height = 10)
+##保存结果
+write.csv(pData(mycds), "11.pseudotime.csv")
+
+# 创建第一个轨迹图，使用 State 进行分面显示
+p1 <- plot_cell_trajectory(mycds, color_by = "State") + facet_wrap(~ State, nrow = 1)
+ggsave("pseudotime_HT/p1_trajectory_facet.png", plot = p1, width =11, height = 5)
+# 创建第二个轨迹图，使用 sample 进行分面显示
+p2 <- plot_cell_trajectory(mycds, color_by = "sample") + facet_wrap(~ sample, nrow = 1)
+ggsave("pseudotime_HT/p2_trajectory_facet.png", plot = p2, width = 11, height = 4)
+# 创建第三个轨迹图，使用 seurat_clusters 进行分面显示
+p3 <- plot_cell_trajectory(mycds, color_by = "seurat_clusters") + facet_wrap(~ seurat_clusters, nrow = 3)
+ggsave("pseudotime_HT/p3_trajectory_facet.png", plot = p3, width = 12, height = 10)
+# 创建第四个轨迹图，使用 seurat_clusters 进行分面显示
+p4 <- plot_cell_trajectory(mycds, color_by = "cellType") + facet_wrap(~ cellType, nrow = 3)
+ggsave("pseudotime_HT/p4_trajectory_facet.png", plot = p4, width = 8, height = 7)
+#Monocle基因可视化
+# 定义要绘制的基因
+s.genes <- c("SERPINA1","TLR2", "MRC1")
+p1 <- plot_genes_jitter(mycds[s.genes,], grouping = "sample", color_by = "sample") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # 调整 x 轴文本角度和对齐方式
+p2 <- plot_genes_violin(mycds[s.genes,], grouping = "sample", color_by = "sample") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # 调整 x 轴文本角度和对齐方式
+p3 <- plot_genes_in_pseudotime(mycds[s.genes,], color_by = "sample")
+plotc <- p1 | p2 | p3
+
+# 保存合并后的图形到文件
+ggsave("pseudotime_HT/1genes_visual.png", plot = plotc, width = 12, height = 4.5)
+
+#Monocle基因可视化
+s.genes <- c("SERPINA1","TLR2", "MRC1","TLR4")
+p1 <- plot_genes_jitter(mycds[s.genes,], grouping = "State", color_by = "State")
+p2 <- plot_genes_violin(mycds[s.genes,], grouping = "State", color_by = "State")
+p3 <- plot_genes_in_pseudotime(mycds[s.genes,], color_by = "State")
+plotc <- p1|p2|p3
+ggsave("pseudotime_HT/2genes_visual.png", plot = plotc, width = 12, height = 6)
+
+#Monocle基因可视化
+s.genes <- c("SERPINA1","TLR2", "MRC1")
+p1 <- plot_genes_jitter(mycds[s.genes,], grouping = "Pseudotime", color_by = "Pseudotime")
+p2 <- plot_genes_violin(mycds[s.genes,], grouping = "Pseudotime", color_by = "Pseudotime")
+p3 <- plot_genes_in_pseudotime(mycds[s.genes,], color_by = "Pseudotime")
+plotc <- p1|p2|p3
+ggsave("pseudotime_HT/3genes_visual.png", plot = plotc, width = 12, height = 4.5)
+
+#拟时相关基因聚类热图
+# 读取差异基因文件
+diff.genes <- read.csv('F:/scRNA/workpath/3.myeloid/11.Subset_myeloid.csv')
+
+# 筛选显著差异基因
+sig_diff.genes <- subset(diff.genes, p_val_adj < 0.01 & abs(avg_log2FC) > 2.5)$gene
+sig_diff.genes <- unique(as.character(sig_diff.genes))
+
+# 确保 sig_diff.genes 中的基因名称在 mycds 中存在且匹配
+common_genes <- intersect(sig_diff.genes, rownames(mycds))
+
+# 进行差异基因测试
+diff_test <- differentialGeneTest(mycds[common_genes, ], cores = 1, fullModelFormulaStr = "~sm.ns(Pseudotime)")
+
+# 获取显著差异基因的名称
+sig_gene_names <- row.names(subset(diff_test, pval < 0.01))
+
+# 绘制拟时间热图并保存
+p1 <- plot_pseudotime_heatmap(mycds[sig_gene_names, ], num_clusters = 3, show_rownames = TRUE, return_heatmap = TRUE)
+
+# 保存热图
+ggsave("pseudotime_HT/pseudotime_heatmap1.png", plot = p1, width = 5, height = 10, limitsize = FALSE)
+ggsave("pseudotime_HT/pseudotime_heatmap1.pdf", plot = p1, width = 5, height = 10, limitsize = FALSE)
+#高变基因
+disp_table <- dispersionTable(mycds)
+disp.genes <- subset(disp_table, mean_expression >= 1&dispersion_empirical >= 2*dispersion_fit)
+disp.genes <- as.character(disp.genes$gene_id)
+diff_test <- differentialGeneTest(mycds[disp.genes,], cores = 6, 
+                                  fullModelFormulaStr = "~sm.ns(Pseudotime)")
+sig_gene_names <- row.names(subset(diff_test, qval < 1e-04))
+p2 = plot_pseudotime_heatmap(mycds[sig_gene_names,], num_clusters=3,
+                             show_rownames=T, return_heatmap=T)
+ggsave("pseudotime_HT/pseudotime_heatmap2.png", plot = p2, width = 5, height = 10)
+ggsave("pseudotime_HT/pseudotime_heatmap2.pdf", plot = p2, width = 5, height = 10)
+save.image("my_workspace_拟时序.RData")
+

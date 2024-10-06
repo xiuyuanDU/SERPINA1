@@ -1,0 +1,84 @@
+setwd('F:/scRNA/workpath/2.thyrocytes')
+Subset_thyrocytes <- readRDS("Subset_thyrocytes.rds")
+
+# Extract the expression levels of the SERPINA1 gene
+SERPINA1_expression <- FetchData(Subset_thyrocytes, vars = c("SERPINA1"), cells = Cells(Subset_thyrocytes))
+
+# Check the extraction result and ensure it is a numeric vector
+if (is.list(SERPINA1_expression)) {
+  SERPINA1_expression <- unlist(SERPINA1_expression)
+}
+
+SERPINA1_expression[is.na(SERPINA1_expression)] <- 0
+SERPINA1_expression <- as.numeric(SERPINA1_expression)
+
+# Extract cluster information
+cluster_info <- Subset_thyrocytes$seurat_clusters
+
+# Create a dataframe containing SERPINA1 expression levels and cluster information
+data_df <- data.frame(SERPINA1_Expression = SERPINA1_expression, Cluster = cluster_info)
+
+# Select specific cluster types
+# selected_Clusters <- c("")
+# data_df <- data_df[data_df$Tissue %in% selected_Clusters, ]
+
+# Load necessary packages
+library(ggplot2)
+library(multcompView)
+
+# Conduct a one-way ANOVA
+anova_result <- aov(SERPINA1_Expression ~ Cluster, data = data_df)
+summary(anova_result)
+
+# If ANOVA is significant, perform Tukey HSD test
+if (summary(anova_result)[[1]][["Pr(>F)"]][1] < 0.05) {
+  tukey_result <- TukeyHSD(anova_result, "Cluster")
+  print(tukey_result)
+  
+  # Extract Tukey HSD results
+  tukey_data <- as.data.frame(tukey_result$Cluster)
+  
+  # Keep only comparisons involving "tumor_With_HT" and the other three groups
+  # tukey_filtered <- tukey_data[grepl("tumor_With_HT", rownames(tukey_data)), ]
+  
+  # Add significance labels
+  tukey_letters <- multcompLetters4(anova_result, tukey_result)
+  tukey_significance <- tukey_letters$Cluster$Letters
+}
+
+# Calculate the standard error for each group
+SE <- with(data_df, tapply(SERPINA1_Expression, Cluster, function(x) sd(x) / sqrt(length(x))))
+
+# Calculate the mean expression level for each cluster
+mean_expression <- with(data_df, tapply(SERPINA1_Expression, Cluster, mean))
+
+# Create a dataframe containing mean values and standard errors
+mean_se_df <- data.frame(Cluster = names(mean_expression), Mean = mean_expression, SE = SE)
+
+# Add significance labels to the dataframe
+mean_se_df$Significance <- tukey_significance[match(mean_se_df$Cluster, names(tukey_significance))]
+
+# Plot the bar chart
+# Convert seurat_clusters to factor and specify the order
+mean_se_df$Cluster <- factor(mean_se_df$Cluster, levels = 0:12)
+
+# Create ggplot graphic
+p3 <- ggplot(mean_se_df, aes(x = Cluster, y = Mean, fill = Cluster)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = Mean - SE, ymax = Mean + SE), width = 0.2) +
+  geom_text(aes(label = Significance), vjust = -0.5, size = 5) +
+  xlab("Cluster") +
+  ylab("Mean SERPINA1 Expression") +
+  ggtitle("Comparison of Mean SERPINA1 Expression Across Cell Clusters") +
+  theme_minimal() +
+  scale_x_discrete(labels = 0:12)  # Set the x-axis labels from 0 to 12
+
+# Display the graphic
+print(p3)
+
+pdf(file = "07.thyrocytes.combined.pdf", width = 7, height = 5)
+p3
+dev.off()
+
+# Save the graphic
+# ggsave("08_SERPINA1_mean_expression_with_significance.pdf", width = 15, height = 10)
